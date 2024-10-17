@@ -7,3 +7,5 @@ If you have anything to ask, just send in gc, Theres also a project manager boar
 
 
 Also make sure to push any Progress or pull any progress from day to day, stuff is always changing unless youre working on a certain problem by yourself
+
+If two people are working in different directions on the same problem (using different ways/ideas to solve it), Make sure to create your own side branch and then we'll pick and choose what to push to main, but preferably work on it together instead aka dont waste time.
