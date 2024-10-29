@@ -2,6 +2,7 @@
 
 import cv2
 
+from ObjectTracker import *
 
 
 Debug = False
