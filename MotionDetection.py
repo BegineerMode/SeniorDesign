@@ -7,9 +7,9 @@ import cv2
 Debug = False
 
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('C:/Users/reese/Downloads/coffee.mp4', )
+cap = cv2.VideoCapture('C:/Users/reese/Downloads/cars2.mp4', )
 
-objdetect = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=16)
+objdetect = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=16)
 
 
 # Check if camera opened successfully
@@ -24,16 +24,21 @@ while(cap.isOpened()):
     if ret == True:
 
         mask = objdetect.apply(frame)
+        _, mask = cv2.threshold(mask, 254, 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        detections = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area>20000:
+            if area>30:
 
                 #cv2.drawContours(frame, [cnt], -1, (0,255,0), 2)
                 x, y, w, h = cv2.boundingRect(cnt)
                 cv2.rectangle(frame, (x,y), (x+w, y+h), (0,255,0))
+                
+                detections.append([x, y, w, h])
 
     # Display the resulting frame
+        print(detections)
         cv2.imshow('Frame', frame)
         
         
