@@ -2,7 +2,7 @@
 
 import cv2
 
-#from ObjectTracker import *
+from ObjectTracker import *
 
 
 Debug = False
@@ -12,7 +12,7 @@ cap = cv2.VideoCapture('cars2.mp4', )
 
 objdetect = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=16)
 
-
+tracker = DistTracker()
 # Check if camera opened successfully
 if (cap.isOpened()== False):
     print("Error opening video file")
@@ -30,7 +30,7 @@ while(cap.isOpened()):
         detections = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area>30:
+            if area>50:
 
                 #cv2.drawContours(frame, [cnt], -1, (0,255,0), 2)
                 x, y, w, h = cv2.boundingRect(cnt)
@@ -39,7 +39,16 @@ while(cap.isOpened()):
                 detections.append([x, y, w, h])
 
     # Display the resulting frame
-        print(detections)
+        tracker.update(detections)
+        for box in tracker.objects:
+            print(box.ID, box.coordinates)
+            x = box.coordinates[0]
+            y = box.coordinates[1]
+            w = box.coordinates[2]
+            h = box.coordinates[3]
+            cv2.putText(frame, str(box.ID), (x,y-15),cv2.FONT_HERSHEY_PLAIN, 1, (255,0,0), 2)
+            cv2.rectangle(frame, (x,y), (x+w, y+h), (0,255,0), 3)
+
         cv2.imshow('Frame', frame)
         
         

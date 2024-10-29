@@ -1,5 +1,5 @@
 
-debug = True
+debug = False
 
 
 class DistTracker:
@@ -11,7 +11,7 @@ class DistTracker:
     def update(self, detections):
         if self.detection == []:
             self.detection = detections
-        for coords in detection:
+        for coords in detections:
             self.CheckObject(coords)
 
     def CheckObject(self, coordinates):
@@ -30,7 +30,7 @@ class DistTracker:
                 
 
     def SameObjectDetection(self, new, old):
-        if (abs(new[0] - old.coordinates[0]) < 10 and abs(new[1] - old.coordinates[1]) < 10):
+        if (abs(new[0] - old.coordinates[0]) < 40 and abs(new[1] - old.coordinates[1]) < 40):
             old.coordinates = new
             return True
         return False
