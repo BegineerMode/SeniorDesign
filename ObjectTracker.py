@@ -25,7 +25,8 @@ class Objects:
     def update(self, coordinates):
         self.coordinates = coordinates
 
-    def SameObjectDetection
+    def SameObjectDetection(self, newcoordinates):
+        pass
         
 
 if debug == True:

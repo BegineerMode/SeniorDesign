@@ -2,13 +2,13 @@
 
 import cv2
 
-from ObjectTracker import *
+#from ObjectTracker import *
 
 
 Debug = False
 
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('C:/Users/reese/Downloads/cars2.mp4', )
+cap = cv2.VideoCapture('cars2.mp4', )
 
 objdetect = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=16)
 
