@@ -8,9 +8,9 @@ from ObjectTracker import *
 Debug = False
 
 # Create a VideoCapture object and read from input file
-cap = cv2.VideoCapture('cars2.mp4', )
+cap = cv2.VideoCapture('traffic.mp4')
 
-objdetect = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=16)
+objdetect = cv2.createBackgroundSubtractorMOG2( history=100, varThreshold=16, detectShadows=True)
 
 tracker = DistTracker()
 # Check if camera opened successfully
@@ -30,7 +30,7 @@ while(cap.isOpened()):
         detections = []
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area>50:
+            if area>25:
 
                 #cv2.drawContours(frame, [cnt], -1, (0,255,0), 2)
                 x, y, w, h = cv2.boundingRect(cnt)
