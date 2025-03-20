@@ -22,6 +22,7 @@ def switch_to_page(current_page, create_next_page):
     # Create the next page
     create_next_page()
 
+#balls
 # Function to go back to the previous page
 def go_back(current_page):
     # Destroy the current page
