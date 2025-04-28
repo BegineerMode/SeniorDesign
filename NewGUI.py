@@ -1,8 +1,10 @@
 import tkinter as tk
 from tkinter import simpledialog, messagebox, filedialog
 from PIL import Image, ImageTk
-import subprocess, os, time, ctypes
+import subprocess, os, time, ctypes, signal
 import psutil
+import time
+
 
 class App(tk.Tk):
     def __init__(self):
@@ -21,12 +23,12 @@ class App(tk.Tk):
         menubar = tk.Menu(self)
         page_menu = tk.Menu(menubar, tearoff=0)
         page_menu.add_command(label="Home", command=lambda: self.show_frame("HomePage"))
-        page_menu.add_command(label="Private Network", command=self.open_private_page)
+        page_menu.add_command(label="Private Network", command=lambda:self.show_frame("PrivateNetworkPage"))
         page_menu.add_command(label="Camera Config", command=lambda: self.show_frame("CameraConfigPage"))
         page_menu.add_command(label="Network Logs", command=lambda: self.show_frame("NetworkLogsPage"))
         page_menu.add_command(label="Data Streaming", command=lambda: self.show_frame("DataStreamingPage"))
         page_menu.add_command(label="System Monitoring", command=lambda: self.show_frame("SystemMonitoringPage"))
-        page_menu.add_command(label="Settings", command=self.open_settings_page)
+        page_menu.add_command(label="Settings", command=lambda: self.show_frame("SettingsPage"))
         page_menu.add_separator()
         page_menu.add_command(label="Quit", command=self.destroy)
         menubar.add_cascade(label="Menu", menu=page_menu)
@@ -76,9 +78,9 @@ class BasePage(tk.Frame):
 class HomePage(BasePage):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        tk.Label(self, text="WireGuard GUI - Home", fg="white", bg="#1a1a1a",
+        tk.Label(self, text="Substation Intrusion Detection System - Home", fg="white", bg="#1a1a1a",
                  font=("Arial", 18)).pack(pady=10)
-        tk.Label(self, text="Welcome to the WireGuard GUI. Use the menu to navigate.", fg="white", bg="#1a1a1a").pack()
+        tk.Label(self, text="Welcome! Use the menu to navigate.", fg="white", bg="#1a1a1a").pack()
 
 class PrivateNetworkPage(BasePage):
     def __init__(self, parent, controller):
@@ -93,7 +95,9 @@ class PrivateNetworkPage(BasePage):
         # Deactivate tunnel button
         tk.Button(self, text="Deactivate/Tunnel", command=self.tunnels,
                   bg="#aa0000", fg="white").pack(pady=5)
-        tk.Label(self, text="Active Tunnels: wg0, wg1 (example)", fg="white", bg="#1a1a1a").pack(pady=(5,15))
+        self.active_tunnels_var = tk.StringVar()
+        self.active_tunnels_var.set("Active Tunnels: None")
+        tk.Label(self, textvariable=self.active_tunnels_var, fg="white", bg="#1a1a1a").pack(pady=(5,15))
         # Create Config section
         config_frame = tk.LabelFrame(self, text="Create Config Template", fg="orange", bg="#1a1a1a")
         config_frame.pack(fill="x", padx=10, pady=10)
@@ -110,8 +114,59 @@ class PrivateNetworkPage(BasePage):
                   bg="#0055aa", fg="white")\
             .grid(row=2, column=0, columnspan=2, pady=5)
         config_frame.columnconfigure((0,1), weight=1)
+        self.update_active_tunnels()
+
+        
+    def get_active_tunnels(self):
+        try:
+            output = subprocess.check_output(["wg", "show", "interfaces"])
+            tunnels = output.decode().split()
+            return tunnels
+        except Exception:
+            pass
+
+    def update_active_tunnels(self):
+        active = self.get_active_tunnels()
+        if active:
+            self.active_tunnels_var.set(f"Active Tunnel(s): {', '.join(active)}")
+        else:
+            self.active_tunnels_var.set("Active Tunnels: None")
+
+        # 📢 Call itself again after 5 seconds
+        self.after(5000, self.update_active_tunnels)
+
+    # def generate_keys(self):
+    #     """Generate WireGuard private/public key pair and display/save them."""
+    #     try:
+    #         priv = subprocess.check_output("wg genkey", shell=True).decode().strip()
+    #         pub = subprocess.check_output(f"echo {priv} | wg pubkey", shell=True).decode().strip()
+    #     except Exception as e:
+    #         messagebox.showerror("Error", f"Key generation failed: {e}")
+    #         return
+    #     # Display keys in text boxes
+    #     self.private_text.delete(0, tk.END); self.private_text.insert(0, priv)
+    #     self.public_text.delete(0, tk.END); self.public_text.insert(0, pub)
+    #     # Save keys to config folder
+    #     config_folder = "/etc/wireguard"
+    #     os.makedirs(config_folder, exist_ok=True)
+    #     priv_file = os.path.join(config_folder, "private.key")
+    #     pub_file = os.path.join(config_folder, "public.key")
+    #     try:
+    #         with open(priv_file, "w") as f: f.write(priv)
+    #         with open(pub_file, "w") as f: f.write(pub)
+    #         os.chmod(priv_file, 0o600)  # secure permissions
+    #         messagebox.showinfo("Saved", f"Keys saved to {config_folder}")
+    #     except Exception as e:
+    #         messagebox.showerror("Error", f"Failed to save keys: {e}")
+
+
+
     def tunnels(self):
-        # Step 1: Ask user to select a WireGuard .conf file
+        # Step 1: Ask user if they want to START or STOP a tunnel
+        action = messagebox.askquestion("Tunnel Action", "Do you want to start a tunnel? (Select 'No' to stop a tunnel)")
+        start_tunnel = True if action == 'yes' else False
+
+        # Step 2: Ask user to select a WireGuard .conf file
         config_path = filedialog.askopenfilename(
             title="Select WireGuard Config",
             filetypes=[("WireGuard Config", "*")]
@@ -119,38 +174,53 @@ class PrivateNetworkPage(BasePage):
         if not config_path:
             return  # user canceled the dialog
 
-        # Step 2: Define the WireGuard executable path and arguments
+        # Step 3: WireGuard executable path
         wireguard_exe = r"C:\Program Files\WireGuard\wireguard.exe"
-        args = [wireguard_exe, "/installtunnelservice", config_path]
+        tunnel_name = os.path.splitext(os.path.basename(config_path))[0]
+        tunnel_name = tunnel_name.replace(".conf", "")  # name without .conf
 
-        # Step 3: Check for admin rights
+        # Step 4: Check admin rights
         try:
             is_admin = ctypes.windll.shell32.IsUserAnAdmin()
         except:
             is_admin = False
 
-        if is_admin:
-            # Already admin: run the command directly
-            try:
-                subprocess.run(args, check=True)
-                messagebox.showinfo("Success", "WireGuard tunnel activated.")
-            except subprocess.CalledProcessError as e:
-                messagebox.showerror("Error", f"Activation failed: {e}")
-        else:
-            # Not admin: re-run the WireGuard command elevated
-            # Using ShellExecute with 'runas' will prompt UAC
-            params = f'/installtunnelservice "{config_path}"'
-            result = ctypes.windll.shell32.ShellExecuteW(
-                None, "runas", wireguard_exe, params, None, 1
-            )
-            if result <= 32:
-                messagebox.showerror("Error", "Failed to elevate permissions.")
+        try:
+            if start_tunnel:
+                # ✅ YOUR ORIGINAL WAY: use full config path when starting
+                args = [wireguard_exe, "/installtunnelservice", config_path]
+                if is_admin:
+                    subprocess.run(args, check=True)
+                else:
+                    params = f'/installtunnelservice "{config_path}"'
+                    result = ctypes.windll.shell32.ShellExecuteW(None, "runas", wireguard_exe, params, None, 1)
+                    if result <= 32:
+                        raise PermissionError("Failed to elevate permissions.")
 
-        messagebox.showinfo("Tunnels", "All active WireGuard tunnels have been deactivated.")
-        # If relay, log activity
-        if self.relay_var.get():
-            with open("network.log", "a") as f:
-                f.write(f"[{time.ctime()}] Relay server deactivated all tunnels\n")
+                messagebox.showinfo("Success", f"Tunnel '{tunnel_name}' activated.")
+
+            else:
+                # 🛑 STOPPING needs just the tunnel name
+                args = [wireguard_exe, "/uninstalltunnelservice", tunnel_name]
+                if is_admin:
+                    subprocess.run(args, check=True)
+                else:
+                    params = f'/uninstalltunnelservice {tunnel_name}'
+                    result = ctypes.windll.shell32.ShellExecuteW(None, "runas", wireguard_exe, params, None, 1)
+                    if result <= 32:
+                        raise PermissionError("Failed to elevate permissions.")
+
+                messagebox.showinfo("Success", f"Tunnel '{tunnel_name}' deactivated.")
+
+            # Step 5: Log activity if relay_var is set
+            if self.relay_var.get():
+                with open("network.log", "a") as f:
+                    f.write(f"[{time.ctime()}] {'Activated' if start_tunnel else 'Deactivated'} tunnel {tunnel_name}\n")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Tunnel operation failed:\n{e}")
+
+    
     def generate_config(self):
         if self.template_var.get() == "p2p":
             template = (
@@ -180,9 +250,16 @@ class CameraConfigPage(BasePage):
         tk.Radiobutton(self, text="Use custom command", variable=self.use_default, value=False,
                        fg="white", bg="#1a1a1a", selectcolor="#333333").pack(anchor="w", padx=10)
         self.ffmpeg_cmd_entry = tk.Entry(self, width=80, bg="#333333", fg="white")
-        default_cmd = "ffmpeg -f v4l2 -i /dev/video0 -c:v libx264 -preset veryfast -tune zerolatency -f mpegts udp://<dest_ip>:1234"
+        default_cmd = "ffmpeg -r 30 -i http://192.168.1.134:8080 -an -c:v libx264 -preset veryfast -tune zerolatency -crf 23 -minrate 3000k -maxrate 3000k -bufsize 16000k -g 60 -f mpegts udp://127.0.0.1:6000?pkt_size=1316"
+        #/ffmpeg -f gdigrab -framerate 30 -i desktop -vcodec libx264 -preset ultrafast -tune zerolatency -f mpegts udp://127.0.0.1:6000
+        #ffmpeg -f v4l2 -i /dev/video0 -c:v libx264 -preset veryfast -tune zerolatency -f mpegts udp://<dest_ip>:1234
         self.ffmpeg_cmd_entry.insert(0, default_cmd)
         self.ffmpeg_cmd_entry.pack(padx=10, pady=5, fill="x")
+
+        self.ffmpeg_cmd_entry_receiving = tk.Entry(self, width=80, bg="#333333", fg="white")
+        default_cmd_receiving = "ffplay udp://127.0.0.1:6000"
+        self.ffmpeg_cmd_entry_receiving.insert(0, default_cmd_receiving)
+        self.ffmpeg_cmd_entry_receiving.pack(padx=10, pady=5, fill="x")
         # Sending feed controls
         send_frame = tk.Frame(self, bg="#1a1a1a")
         send_frame.pack(pady=5)
@@ -243,26 +320,47 @@ class CameraConfigPage(BasePage):
     def start_sending(self):
         cmd = self.ffmpeg_cmd_entry.get() if not self.use_default.get() else self.ffmpeg_cmd_entry.get()
         try:
-            self.send_proc = subprocess.Popen(cmd, shell=True)
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+            self.send_proc = subprocess.Popen(cmd, shell=True, creationflags=creationflags)
             self.start_send_btn.config(state="disabled")
             self.stop_send_btn.config(state="normal")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start sending feed: {e}")
     def stop_sending(self):
-        if hasattr(self, 'send_proc'):
-            self.send_proc.terminate()
-            self.start_send_btn.config(state="normal")
-            self.stop_send_btn.config(state="disabled")
+        if hasattr(self, 'send_proc') and self.send_proc.poll() is None:
+            try:
+                self.send_proc.send_signal(signal.CTRL_BREAK_EVENT)
+                self.send_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.send_proc.kill()
+            finally:
+                self.start_send_btn.config(state="normal")
+                self.stop_send_btn.config(state="disabled")
     def start_receiving(self):
         self.cam1_label.config(text="Receiving Feed 1...")
         self.cam2_label.config(text="Receiving Feed 2...")
+        cmd = self.ffmpeg_cmd_entry_receiving.get() if not self.use_default.get() else self.ffmpeg_cmd_entry_receiving.get()
+        try:
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+            self.receive_proc = subprocess.Popen(cmd, shell=True, creationflags=creationflags)
+            self.start_recv_btn.config(state="disabled")
+            self.stop_recv_btn.config(state="normal")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to start receiving feed: {e}")
         self.start_recv_btn.config(state="disabled")
         self.stop_recv_btn.config(state="normal")
     def stop_receiving(self):
         self.cam1_label.config(text="Live Feed 1")
         self.cam2_label.config(text="Live Feed 2")
-        self.start_recv_btn.config(state="normal")
-        self.stop_recv_btn.config(state="disabled")
+        if hasattr(self, 'receive_proc') and self.receive_proc.poll() is None:
+            try:
+                self.receive_proc.send_signal(signal.CTRL_BREAK_EVENT)
+                self.receive_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.receive_proc.kill()
+            finally:
+                self.start_recv_btn.config(state="normal")
+                self.stop_recv_btn.config(state="disabled")
     def start_recording(self):
         filename = time.strftime("%Y%m%d_%H%M%S") + ".mp4"
         filepath = os.path.join("Recordings", filename)
@@ -351,8 +449,8 @@ class SystemMonitoringPage(BasePage):
         self.cpu_label.pack()
         self.mem_label = tk.Label(self, text="", fg="white", bg="#1a1a1a")
         self.mem_label.pack()
-        self.vpn_label = tk.Label(self, text="", fg="white", bg="#1a1a1a")
-        self.vpn_label.pack()
+        self.tunnel_status_label = tk.Label(self, text="", fg="white", bg="#1a1a1a")
+        self.tunnel_status_label.pack()
         self.uptime_label = tk.Label(self, text="", fg="white", bg="#1a1a1a")
         self.uptime_label.pack()
         self.update_stats()
@@ -371,9 +469,21 @@ class SystemMonitoringPage(BasePage):
             recv = counters['wg0'].bytes_recv
             self.vpn_label.config(text=f"wg0 Sent: {sent} bytes, Recv: {recv} bytes")
         else:
-            self.vpn_label.config(text="wg0 interface not active")
+            self.tunnel_status_label.config(text="wg0 interface not active")
         self.uptime_label.config(text=f"Uptime: {hours}h {mins}m")
         self.after(5000, self.update_stats)
+    def update_tunnel_status(self):
+        """Update tunnel status, network I/O, and health status every 10 seconds."""
+        try:
+            output = subprocess.check_output(["wg", "show", "interfaces"])
+            tunnels = output.decode().split()
+            if tunnels:
+                self.tunnel_status_label.config(text="Tunnel Status: Active", fg="green")
+            else:
+                self.tunnel_status_label.config(text="Tunnel Status: Down", fg="red")
+        except Exception:
+            self.tunnel_status_label.config(text="Tunnel Status: Unknown", fg="orange")
+        
 
 class SettingsPage(BasePage):
     def __init__(self, parent, controller):
