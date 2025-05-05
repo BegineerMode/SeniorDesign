@@ -4,13 +4,23 @@ from PIL import Image, ImageTk
 import subprocess, os, time, ctypes, signal
 import psutil
 import time
+import threading
+import json
+import cv2
+import socket
+import pickle
+import struct
+
+
+
 
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("WireGuard GUI")
-        self.geometry("1000x700")
+        self.geometry("1300x800")  # or even 1400x900
+
         self.configure(bg="#1a1a1a")  # Dark fire-themed background
         # Load logo image (flame+substation motif)
         try:
@@ -29,6 +39,7 @@ class App(tk.Tk):
         page_menu.add_command(label="Data Streaming", command=lambda: self.show_frame("DataStreamingPage"))
         page_menu.add_command(label="System Monitoring", command=lambda: self.show_frame("SystemMonitoringPage"))
         page_menu.add_command(label="Settings", command=lambda: self.show_frame("SettingsPage"))
+        page_menu.add_command(label="Calibration / Zones", command=lambda: self.show_frame("CalibrationPage"))
         page_menu.add_separator()
         page_menu.add_command(label="Quit", command=self.destroy)
         menubar.add_cascade(label="Menu", menu=page_menu)
@@ -40,7 +51,7 @@ class App(tk.Tk):
         container.grid_columnconfigure(0, weight=1)
         self.frames = {}
         for F in (HomePage, PrivateNetworkPage, CameraConfigPage, NetworkLogsPage,
-                  DataStreamingPage, SystemMonitoringPage, SettingsPage):
+                  DataStreamingPage, SystemMonitoringPage, SettingsPage, CalibrationPage):
             frame = F(container, self)
             self.frames[F.__name__] = frame
             frame.grid(row=0, column=0, sticky="nsew")
@@ -173,11 +184,14 @@ class PrivateNetworkPage(BasePage):
         )
         if not config_path:
             return  # user canceled the dialog
+        
 
         # Step 3: WireGuard executable path
         wireguard_exe = r"C:\Program Files\WireGuard\wireguard.exe"
         tunnel_name = os.path.splitext(os.path.basename(config_path))[0]
         tunnel_name = tunnel_name.replace(".conf", "")  # name without .conf
+
+
 
         # Step 4: Check admin rights
         try:
@@ -219,7 +233,6 @@ class PrivateNetworkPage(BasePage):
 
         except Exception as e:
             messagebox.showerror("Error", f"Tunnel operation failed:\n{e}")
-
     
     def generate_config(self):
         if self.template_var.get() == "p2p":
@@ -241,25 +254,39 @@ class PrivateNetworkPage(BasePage):
 class CameraConfigPage(BasePage):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
+        
         tk.Label(self, text="Camera Configuration", fg="orange", bg="#1a1a1a",
                  font=("Arial", 16)).pack(pady=5)
+        
+        self.recording = False
+        self.video_writer = None
+        self.ai_process = None  
+
         # FFmpeg command option
         self.use_default = tk.BooleanVar(value=True)
-        tk.Radiobutton(self, text="Use default FFmpeg command", variable=self.use_default, value=True,
-                       fg="white", bg="#1a1a1a", selectcolor="#333333").pack(anchor="w", padx=10)
-        tk.Radiobutton(self, text="Use custom command", variable=self.use_default, value=False,
-                       fg="white", bg="#1a1a1a", selectcolor="#333333").pack(anchor="w", padx=10)
         self.ffmpeg_cmd_entry = tk.Entry(self, width=80, bg="#333333", fg="white")
-        default_cmd = "ffmpeg -r 30 -i http://192.168.1.134:8080 -an -c:v libx264 -preset veryfast -tune zerolatency -crf 23 -minrate 3000k -maxrate 3000k -bufsize 16000k -g 60 -f mpegts udp://127.0.0.1:6000?pkt_size=1316"
+        default_cmd = "ffmpeg -r 30 -i http://192.168.1.134:8080 -an -c:v libx264 -preset veryfast -tune zerolatency -crf 23 -minrate 3000k -maxrate 3000k -bufsize 16000k -g 60 -f mpegts udp://127.0.0.1:12345?pkt_size=1316"
         #/ffmpeg -f gdigrab -framerate 30 -i desktop -vcodec libx264 -preset ultrafast -tune zerolatency -f mpegts udp://127.0.0.1:6000
         #ffmpeg -f v4l2 -i /dev/video0 -c:v libx264 -preset veryfast -tune zerolatency -f mpegts udp://<dest_ip>:1234
         self.ffmpeg_cmd_entry.insert(0, default_cmd)
         self.ffmpeg_cmd_entry.pack(padx=10, pady=5, fill="x")
 
+        self.ffmpeg_cmd_entry2 = tk.Entry(self, width=80, bg="#333333", fg="white")
+        default_cmd2 = "ffmpeg -r 30 -i http://192.168.1.107:8080 -an -c:v libx264 -preset veryfast -tune zerolatency -crf 23 -minrate 3000k -maxrate 3000k -bufsize 16000k -g 60 -f mpegts udp://127.0.0.1:12346?pkt_size=1316"
+        #/ffmpeg -f gdigrab -framerate 30 -i desktop -vcodec libx264 -preset ultrafast -tune zerolatency -f mpegts udp://127.0.0.1:6000
+        #ffmpeg -f v4l2 -i /dev/video0 -c:v libx264 -preset veryfast -tune zerolatency -f mpegts udp://<dest_ip>:1234
+        self.ffmpeg_cmd_entry2.insert(0, default_cmd2)
+        self.ffmpeg_cmd_entry2.pack(padx=10, pady=5, fill="x")
+
         self.ffmpeg_cmd_entry_receiving = tk.Entry(self, width=80, bg="#333333", fg="white")
-        default_cmd_receiving = "ffplay udp://127.0.0.1:6000"
+        default_cmd_receiving = "udp://127.0.0.1:12345?fifo_size=1000000&overrun_nonfatal=1"
         self.ffmpeg_cmd_entry_receiving.insert(0, default_cmd_receiving)
         self.ffmpeg_cmd_entry_receiving.pack(padx=10, pady=5, fill="x")
+        
+        self.ffmpeg_cmd_entry_receiving2 = tk.Entry(self, width=80, bg="#333333", fg="white")
+        default_cmd_receiving2 = "udp://127.0.0.1:12346?fifo_size=1000000&overrun_nonfatal=1"
+        self.ffmpeg_cmd_entry_receiving2.insert(0, default_cmd_receiving2)
+        self.ffmpeg_cmd_entry_receiving2.pack(padx=10, pady=5, fill="x")
         # Sending feed controls
         send_frame = tk.Frame(self, bg="#1a1a1a")
         send_frame.pack(pady=5)
@@ -270,23 +297,17 @@ class CameraConfigPage(BasePage):
                                        command=self.stop_sending, bg="#aa0000", fg="white", state="disabled")
         self.stop_send_btn.grid(row=0, column=1, padx=5)
         # Receiving feed controls
-        recv_frame = tk.Frame(self, bg="#1a1a1a")
-        recv_frame.pack(pady=5)
-        self.start_recv_btn = tk.Button(recv_frame, text="Start Receiving Feeds",
+        self.start_recv_btn = tk.Button(send_frame, text="Start Receiving Feeds",
                                         command=self.start_receiving, bg="#00aa00", fg="white")
-        self.start_recv_btn.grid(row=0, column=0, padx=5)
-        self.stop_recv_btn = tk.Button(recv_frame, text="Stop Receiving Feeds",
+        self.start_recv_btn.grid(row=0, column=2, padx=5)
+
+        self.start_ai_btn = tk.Button(send_frame, text="Start AI Feed", command=self.start_ai_stream_listener,
+                              bg="#4444aa", fg="white")
+        self.start_ai_btn.grid(row=0, column=4, padx=5)
+
+        self.stop_recv_btn = tk.Button(send_frame, text="Stop Receiving Feeds",
                                        command=self.stop_receiving, bg="#aa0000", fg="white", state="disabled")
-        self.stop_recv_btn.grid(row=0, column=1, padx=5)
-        # Live display placeholders
-        display_frame = tk.Frame(self, bg="#1a1a1a")
-        display_frame.pack(pady=10)
-        self.cam1_label = tk.Label(display_frame, text="Live Feed 1",
-                                   bg="black", fg="white", width=40, height=10)
-        self.cam1_label.grid(row=0, column=0, padx=5)
-        self.cam2_label = tk.Label(display_frame, text="Live Feed 2",
-                                   bg="black", fg="white", width=40, height=10)
-        self.cam2_label.grid(row=0, column=1, padx=5)
+        self.stop_recv_btn.grid(row=0, column=3, padx=5)
         # Time display
         self.time_label = tk.Label(self, text="", fg="white", bg="#1a1a1a", font=("Arial", 14))
         self.time_label.pack(pady=5)
@@ -300,28 +321,125 @@ class CameraConfigPage(BasePage):
         self.stop_rec_btn = tk.Button(rec_frame, text="Stop Recording",
                                       command=self.stop_recording, bg="#aa0000", fg="white", state="disabled")
         self.stop_rec_btn.grid(row=0, column=1, padx=5)
-        # Schedule options
-        sched_frame = tk.Frame(self, bg="#1a1a1a")
-        sched_frame.pack(pady=5, fill="x")
-        tk.Label(sched_frame, text="Add Recording Schedule (HH:MM):",
-                 fg="white", bg="#1a1a1a").grid(row=0, column=0, padx=5)
-        self.schedule_entry = tk.Entry(sched_frame, width=10, bg="#333333", fg="white")
-        self.schedule_entry.grid(row=0, column=1)
-        tk.Button(sched_frame, text="Add", command=self.add_schedule,
-                  bg="#0055aa", fg="white").grid(row=0, column=2, padx=5)
-        self.schedule_list = tk.Listbox(sched_frame, bg="#222222", fg="white", height=4)
-        self.schedule_list.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="we")
-        sched_frame.columnconfigure(2, weight=1)
-        self.recording_schedule = []
+        # Live display placeholders
+        display_frame = tk.Frame(self, bg="#1a1a1a", height=700)
+        display_frame.pack(fill="both", expand=False, pady=(10, 0))
+
+        self.cam1_label = tk.Label(display_frame, text="Live Feed", bg="black", fg="white")
+        self.cam1_label.config(width=960, height=480)
+        self.cam1_label.pack(pady=(10, 0))  # Push down by 40 pixels
+
+        self.cam1_label.pack_propagate(False)
+
+
+        self.cam1_label.pack_propagate(False)
+        display_frame.pack_propagate(False)
+        display_frame.config(height=660, width=1280)
+
+
+
+        # self.cam2_label = tk.Label(display_frame, text="Live Feed 2",
+        #                            bg="black", fg="white", width=40, height=10)
+        # self.cam2_label.grid(row=0, column=1, padx=5)
+        
+        # # Schedule options
+        # sched_frame = tk.Frame(self, bg="#1a1a1a")
+        # sched_frame.pack(pady=5, fill="x")
+        # tk.Label(sched_frame, text="Add Recording Schedule (HH:MM):",
+        #          fg="white", bg="#1a1a1a").grid(row=0, column=0, padx=5)
+        # self.schedule_entry = tk.Entry(sched_frame, width=10, bg="#333333", fg="white")
+        # self.schedule_entry.grid(row=0, column=1)
+        # tk.Button(sched_frame, text="Add", command=self.add_schedule,
+        #           bg="#0055aa", fg="white").grid(row=0, column=2, padx=5)
+        # self.schedule_list = tk.Listbox(sched_frame, bg="#222222", fg="white", height=4)
+        # self.schedule_list.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="we")
+        # sched_frame.columnconfigure(2, weight=1)
+        # self.recording_schedule = []
+
+
+
+    def start_ai_stream_listener(self):
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        try:
+            server_socket.bind(("0.0.0.0", 9999))  # Accept on all interfaces
+            server_socket.listen(1)
+            print("CameraConfigPage: Waiting for AI feed...")
+        except Exception as e:
+            messagebox.showerror("Socket Error", f"Failed to bind socket: {e}")
+            return
+
+        def accept_connection():
+            try:
+                conn, _ = server_socket.accept()
+                print("AI Feed connected")
+                self.receive_ai_frames(conn)
+            except Exception as e:
+                messagebox.showerror("Connection Error", f"AI feed connection failed: {e}")
+
+        threading.Thread(target=accept_connection, daemon=True).start()
+
+    def receive_ai_frames(self, conn):
+        data = b""
+        payload_size = struct.calcsize(">L")
+        while True:
+            try:
+                while len(data) < payload_size:
+                    packet = conn.recv(4096)
+                    if not packet:
+                        return
+                    data += packet
+                packed_msg_size = data[:payload_size]
+                data = data[payload_size:]
+                msg_size = struct.unpack(">L", packed_msg_size)[0]
+
+                while len(data) < msg_size:
+                    data += conn.recv(4096)
+                frame_data = data[:msg_size]
+                data = data[msg_size:]
+
+                frame = pickle.loads(frame_data)
+                self.display_frame(frame)
+            except Exception as e:
+                print(f"Error receiving AI frame: {e}")
+                break
+
+    def display_frame(self, frame):
+        h, w = frame.shape[:2]
+
+        # ✅ Convert original to RGB for padding + display
+        display_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # ✅ Add visual-only top padding
+        top_padding = 280
+        padded_display_rgb = cv2.copyMakeBorder(display_rgb, top_padding, 0, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+
+        # ✅ Convert to PIL image and display
+        img = Image.fromarray(padded_display_rgb)
+        imgtk = ImageTk.PhotoImage(image=img)
+        self.cam1_label.imgtk = imgtk
+        self.cam1_label.configure(image=imgtk, width=w, height=h + top_padding, text="")
+
+        # ✅ Record original frame (unmodified, BGR)
+        if self.recording and self.video_writer:
+            self.video_writer.write(frame)
+
+
+
+
     def update_clock(self):
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         self.time_label.config(text=now)
         self.after(1000, self.update_clock)
     def start_sending(self):
         cmd = self.ffmpeg_cmd_entry.get() if not self.use_default.get() else self.ffmpeg_cmd_entry.get()
+        cmd2 = self.ffmpeg_cmd_entry2.get() if not self.use_default.get() else self.ffmpeg_cmd_entry2.get()
         try:
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
             self.send_proc = subprocess.Popen(cmd, shell=True, creationflags=creationflags)
+            creationflags2 = subprocess.CREATE_NEW_PROCESS_GROUP
+            self.send_proc2 = subprocess.Popen(cmd2, shell=True, creationflags=creationflags2)
             self.start_send_btn.config(state="disabled")
             self.stop_send_btn.config(state="normal")
         except Exception as e:
@@ -331,61 +449,134 @@ class CameraConfigPage(BasePage):
             try:
                 self.send_proc.send_signal(signal.CTRL_BREAK_EVENT)
                 self.send_proc.wait(timeout=5)
+                self.send_proc2.send_signal(signal.CTRL_BREAK_EVENT)
+                self.send_proc2.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.send_proc.kill()
+                self.send_proc2.kill()
             finally:
                 self.start_send_btn.config(state="normal")
                 self.stop_send_btn.config(state="disabled")
     def start_receiving(self):
-        self.cam1_label.config(text="Receiving Feed 1...")
-        self.cam2_label.config(text="Receiving Feed 2...")
+        
+        #self.cam2_label.config(text="Receiving Feed 2...")
         cmd = self.ffmpeg_cmd_entry_receiving.get() if not self.use_default.get() else self.ffmpeg_cmd_entry_receiving.get()
+        cmd2 = self.ffmpeg_cmd_entry_receiving2.get() if not self.use_default.get() else self.ffmpeg_cmd_entry_receiving2.get()
+
+        config = {
+            "camera1": cmd,
+            "camera2": cmd2,
+            # Add more entries as needed
+        }
+
+        self.start_response_listener()  # 👈 Add this
+
+
         try:
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
-            self.receive_proc = subprocess.Popen(cmd, shell=True, creationflags=creationflags)
-            self.start_recv_btn.config(state="disabled")
-            self.stop_recv_btn.config(state="normal")
+            # Save to JSON
+            with open("ai_config.json", "w") as f:
+                json.dump(config, f, indent=4)
+            print("[CONFIG] Saved to ai_config.json")
+
+            # Start finalcamera.py
+            creationflags3 = subprocess.CREATE_NEW_PROCESS_GROUP
+            self.ai_process = subprocess.Popen(["python", "finalcamera.py"], creationflags = subprocess.CREATE_NEW_PROCESS_GROUP)
+            print("Attempting to start")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to start receiving feed: {e}")
-        self.start_recv_btn.config(state="disabled")
-        self.stop_recv_btn.config(state="normal")
+            print(f"[ERROR] Failed to save or launch: {e}")
+        finally:
+            self.stop_recv_btn.config(state="normal")
+            self.start_recv_btn.config(state="disabled")
     def stop_receiving(self):
-        self.cam1_label.config(text="Live Feed 1")
-        self.cam2_label.config(text="Live Feed 2")
-        if hasattr(self, 'receive_proc') and self.receive_proc.poll() is None:
+    # self.cam2_label.config(text="Live Feed 2")
+
+        if self.ai_process and self.ai_process.poll() is None:
             try:
-                self.receive_proc.send_signal(signal.CTRL_BREAK_EVENT)
-                self.receive_proc.wait(timeout=5)
+                self.ai_process.send_signal(signal.CTRL_BREAK_EVENT)
+                self.ai_process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                self.receive_proc.kill()
+                print("[STOP] Timeout – killing process...")
+                self.ai_process.kill()
             finally:
-                self.start_recv_btn.config(state="normal")
-                self.stop_recv_btn.config(state="disabled")
+                self.ai_process = None  # ✅ Clear the reference
+        else:
+            print("[STOP] No active process or already stopped.")
+
+        # ✅ Move this outside of the if-block to always reset GUI
+        self.start_recv_btn.config(state="normal")
+        self.stop_recv_btn.config(state="disabled")
+
+
     def start_recording(self):
-        filename = time.strftime("%Y%m%d_%H%M%S") + ".mp4"
+        filename = time.strftime("Recording_%Y-%m-%d_%H-%M-%S") + ".mp4"
         filepath = os.path.join("Recordings", filename)
-        with open(filepath, "w") as f:
-            f.write("Dummy recording data")
+
+        # Use resolution of incoming feed — adjust if needed
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        self.video_writer = cv2.VideoWriter(filepath, fourcc, 20.0, (1280, 660))
+
+        if not self.video_writer.isOpened():
+            messagebox.showerror("Error", "Could not open video file for writing.")
+            return
+
+        self.recording = True
         self.start_rec_btn.config(state="disabled")
         self.stop_rec_btn.config(state="normal")
+
     def stop_recording(self):
+        self.recording = False
+        if self.video_writer:
+            self.video_writer.release()
+            self.video_writer = None
+
         self.start_rec_btn.config(state="normal")
         self.stop_rec_btn.config(state="disabled")
-    def add_schedule(self):
-        time_str = self.schedule_entry.get().strip()
-        if time_str:
-            self.schedule_list.insert(tk.END, time_str)
-            self.recording_schedule.append(time_str)
-            self.schedule_entry.delete(0, tk.END)
+
+    
+    def start_response_listener(self):
+        def listen():
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
+                server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                server_sock.bind(("127.0.0.1", 9998))  # Set to your preferred port
+                server_sock.listen(1)
+                print("[SOCKET] Waiting for AI response on 127.0.0.1:9998")
+
+                while True:
+                    try:
+                        conn, addr = server_sock.accept()
+                        with conn:
+                            print(f"[SOCKET] Connected by {addr}")
+                            while True:
+                                data = conn.recv(1024)
+                                if not data:
+                                    break
+                                message = data.decode()
+                                print(f"[SOCKET] Message received: {message}")
+                                # Optional: Update GUI label or text box with message
+                    except Exception as e:
+                        print(f"[SOCKET] Listener error: {e}")
+                        break
+
+        threading.Thread(target=listen, daemon=True).start()
+
+    # def add_schedule(self):
+    #     time_str = self.schedule_entry.get().strip()
+    #     if time_str:
+    #         self.schedule_list.insert(tk.END, time_str)
+    #         self.recording_schedule.append(time_str)
+    #         self.schedule_entry.delete(0, tk.END)
 
 class NetworkLogsPage(BasePage):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
         tk.Label(self, text="Network Logs", fg="orange", bg="#1a1a1a",
                  font=("Arial", 16)).pack(pady=5)
+        self.last_size = 0
         self.text = tk.Text(self, bg="#222222", fg="white")
         self.text.pack(fill="both", expand=True, padx=10, pady=10)
         self.freeze = False
+        self.stop_event = threading.Event()
+
         btn_frame = tk.Frame(self, bg="#1a1a1a")
         btn_frame.pack(pady=5)
         self.freeze_btn = tk.Button(btn_frame, text="Freeze", command=self.toggle_freeze,
@@ -393,52 +584,251 @@ class NetworkLogsPage(BasePage):
         self.freeze_btn.grid(row=0, column=0, padx=5)
         tk.Button(btn_frame, text="Clear Logs", command=self.clear_logs,
                   bg="#0055aa", fg="white").grid(row=0, column=1, padx=5)
-    def on_show(self):
-        self.update_logs()
-    def update_logs(self):
-        if not self.freeze:
-            try:
-                with open("network.log", "r") as f:
-                    content = f.read()
-            except FileNotFoundError:
-                content = ""
-            self.text.delete("1.0", tk.END)
-            self.text.insert(tk.END, content)
-        self.after(2000, self.update_logs)
+
     def toggle_freeze(self):
         self.freeze = not self.freeze
         self.freeze_btn.config(text="Unfreeze" if self.freeze else "Freeze")
+
     def clear_logs(self):
-        open("network.log", "w").close()
         self.text.delete("1.0", tk.END)
 
 class DataStreamingPage(BasePage):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
+        self.is_paused = False  # Track pause state
+        self.fast_forward = False  # Track fast-forward state
+        self.frame_rate = 30  # FPS assumed
+
+
+
         tk.Label(self, text="Data Streaming (Recordings)", fg="orange", bg="#1a1a1a",
                  font=("Arial", 16)).pack(pady=5)
-        self.listbox = tk.Listbox(self, bg="#222222", fg="white")
-        self.listbox.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Main content frame (horizontal split)
+        content_frame = tk.Frame(self, bg="#1a1a1a")
+        content_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Left: File list
+        self.listbox = tk.Listbox(content_frame, bg="#222222", fg="white", width=40)
+        self.listbox.pack(side="left", fill="both", expand=True, padx=(0, 10))
         self.listbox.bind('<Double-1>', self.play_selected)
+
+        # Right: Video feed + close button
+        self.video_container = tk.Frame(content_frame, bg="#1a1a1a")
+        self.video_container.pack(side="right", padx=5)
+
+        self.video_label = tk.Label(self.video_container, bg="black", width=960, height=480)
+        self.video_label.pack()
+
+        btn_frame = tk.Frame(self.video_container, bg="#1a1a1a")
+        btn_frame.pack(pady=5)
+
+        self.pause_btn = tk.Button(btn_frame, text="Pause", command=self.toggle_pause,
+                                bg="#ffaa00", fg="black", width=6)
+        self.pause_btn.grid(row=0, column=0, padx=5)
+
+        self.ff_btn = tk.Button(btn_frame, text=">>", command=self.toggle_fast_forward,
+                        bg="#0077ff", fg="white", width=4)
+        self.ff_btn.grid(row=0, column=2, padx=5)
+
+        # ⏪ Rewind
+        self.rewind_btn = tk.Button(btn_frame, text="⏪", command=self.rewind_video,
+                                    bg="#555555", fg="white", width=4)
+        self.rewind_btn.grid(row=0, column=3, padx=5)
+
+        # Timestamp entry
+        self.timestamp_entry = tk.Entry(btn_frame, width=8, bg="#333333", fg="white")
+        self.timestamp_entry.grid(row=0, column=4, padx=(10, 0))
+
+        self.jump_btn = tk.Button(btn_frame, text="Go", command=self.jump_to_time,
+                                bg="#0055aa", fg="white")
+        self.jump_btn.grid(row=0, column=5, padx=5)
+
+
+
+        self.close_btn = tk.Button(btn_frame, text="X", command=self.stop_video,
+                                bg="#aa0000", fg="white", width=3)
+        self.close_btn.grid(row=0, column=1, padx=5)
+
+        self.cap = None
+        self.frame_after_id = None
+
+    def toggle_pause(self):
+        self.is_paused = not self.is_paused
+        if hasattr(self, 'pause_btn'):
+            self.pause_btn.config(text="Resume" if self.is_paused else "Pause")
+
+    def toggle_fast_forward(self):
+        self.fast_forward = not self.fast_forward
+        self.ff_btn.config(bg="#00cc00" if self.fast_forward else "#0077ff")
+
+    def rewind_video(self):
+        if self.cap:
+            current_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+            target_frame = max(0, current_frame - (self.frame_rate * 5))  # Go back 5 seconds
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+
+    def jump_to_time(self):
+        if not self.cap:
+            return
+        time_str = self.timestamp_entry.get().strip()
+        try:
+            parts = list(map(int, time_str.split(":")))
+            if len(parts) == 3:
+                h, m, s = parts
+            elif len(parts) == 2:
+                h = 0
+                m, s = parts
+            elif len(parts) == 1:
+                h = 0
+                m = 0
+                s = parts[0]
+            else:
+                raise ValueError("Invalid format")
+
+            total_seconds = h * 3600 + m * 60 + s
+            frame_num = int(total_seconds * self.frame_rate)
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+        except Exception:
+            messagebox.showerror("Invalid Input", "Use format HH:MM:SS or MM:SS")
+
     def on_show(self):
         self.refresh_list()
+
     def refresh_list(self):
         self.listbox.delete(0, tk.END)
         files = sorted(os.listdir("Recordings"))
         for f in files:
-            self.listbox.insert(tk.END, f)
+            if f.lower().endswith((".mp4", ".ts", ".mov")):
+                self.listbox.insert(tk.END, f)
+
     def play_selected(self, event):
         sel = self.listbox.curselection()
-        if sel:
-            filename = self.listbox.get(sel[0])
-            path = os.path.join("Recordings", filename)
-            try:
-                if os.name == 'nt':
-                    os.startfile(path)
-                else:
-                    subprocess.Popen(['xdg-open', path])
-            except Exception as e:
-                messagebox.showerror("Error", f"Cannot open file: {e}")
+        if not sel:
+            return
+        filename = self.listbox.get(sel[0])
+        path = os.path.join("Recordings", filename)
+
+        self.stop_video()
+        self.cap = cv2.VideoCapture(path)
+        self.update_frame()
+
+    def update_frame(self):
+        if self.cap and self.cap.isOpened():
+            if self.is_paused:
+                self.frame_after_id = self.after(100, self.update_frame)
+                return
+
+            ret, frame = self.cap.read()
+            if ret:
+                # Resize and convert color for Tkinter display
+                frame = cv2.resize(frame, (960, 480))
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(frame)
+                imgtk = ImageTk.PhotoImage(image=img)
+
+                # Update label with new frame
+                self.video_label.imgtk = imgtk
+                self.video_label.config(image=imgtk)
+
+                # Schedule next frame
+                delay = 5 if self.fast_forward else 30
+                self.frame_after_id = self.after(delay, self.update_frame)
+
+            else:
+                self.stop_video()
+
+
+    def stop_video(self):
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        if self.frame_after_id:
+            self.after_cancel(self.frame_after_id)
+            self.frame_after_id = None
+        self.video_label.config(image="")
+
+    # def play_selected(self, event):
+    #     sel = self.listbox.curselection()
+    #     if sel:
+    #         filename = self.listbox.get(sel[0])
+    #         path = os.path.join("Recordings", filename)
+    #         try:
+    #             if os.name == 'nt':
+    #                 os.startfile(path)
+    #             else:
+    #                 subprocess.Popen(['xdg-open', path])
+    #         except Exception as e:
+    #             messagebox.showerror("Error", f"Cannot open file: {e}")
+
+class CalibrationPage(BasePage):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        tk.Label(self, text="Calibration / Virtual Zones", fg="orange", bg="#1a1a1a",
+                 font=("Arial", 16)).pack(pady=10)
+
+        # ZONE CONFIG AREA
+        zone_frame = tk.LabelFrame(self, text="Add Virtual Zone", bg="#1a1a1a", fg="orange")
+        zone_frame.pack(pady=10, padx=10, fill="x")
+
+        tk.Label(zone_frame, text="Zone Name:", fg="white", bg="#1a1a1a").grid(row=0, column=0, padx=5, sticky="e")
+        self.zone_name_entry = tk.Entry(zone_frame, width=30, bg="#333333", fg="white")
+        self.zone_name_entry.grid(row=0, column=1, padx=5)
+
+        tk.Label(zone_frame, text="Coordinates (x1,y1,x2,y2):", fg="white", bg="#1a1a1a").grid(row=1, column=0, padx=5, sticky="e")
+        self.coords_entry = tk.Entry(zone_frame, width=30, bg="#333333", fg="white")
+        self.coords_entry.grid(row=1, column=1, padx=5)
+
+        tk.Button(zone_frame, text="Add Zone", bg="#0055aa", fg="white",
+                  command=self.submit_zone).grid(row=2, column=0, columnspan=2, pady=10)
+
+        # CALIBRATION VALUES AREA
+        calib_frame = tk.LabelFrame(self, text="Set Calibration Values", bg="#1a1a1a", fg="orange")
+        calib_frame.pack(pady=10, padx=10, fill="x")
+
+        tk.Label(calib_frame, text="A Value:", fg="white", bg="#1a1a1a").grid(row=0, column=0, padx=5, sticky="e")
+        self.a_entry = tk.Entry(calib_frame, width=20, bg="#333333", fg="white")
+        self.a_entry.grid(row=0, column=1, padx=5)
+
+        tk.Label(calib_frame, text="B Value:", fg="white", bg="#1a1a1a").grid(row=1, column=0, padx=5, sticky="e")
+        self.b_entry = tk.Entry(calib_frame, width=20, bg="#333333", fg="white")
+        self.b_entry.grid(row=1, column=1, padx=5)
+        
+        tk.Label(calib_frame, text="C Value:", fg="white", bg="#1a1a1a").grid(row=2, column=0, padx=5, sticky="e")
+        self.c_entry = tk.Entry(calib_frame, width=20, bg="#333333", fg="white")
+        self.c_entry.grid(row=2, column=1, padx=5)
+
+        tk.Button(calib_frame, text="Submit Calibration", bg="#0055aa", fg="white",
+                  command=self.submit_calibration).grid(row=3, column=0, columnspan=2, pady=10)
+
+        self.status_label = tk.Label(self, text="", fg="white", bg="#1a1a1a")
+        self.status_label.pack(pady=10)
+
+    def submit_zone(self):
+        zone = self.zone_name_entry.get().strip()
+        coords = self.coords_entry.get().strip()
+        if zone and coords:
+            self.status_label.config(text=f"Zone '{zone}' added at {coords}", fg="white")
+            # You could save or draw this zone
+        else:
+            self.status_label.config(text="Both zone name and coordinates are required.", fg="red")
+
+
+    def submit_calibration(self):
+        a = self.a_entry.get().strip()
+        b = self.b_entry.get().strip()
+        c = self.c_entry.get().strip()
+        if a and b and c:
+            self.status_label.config(text=f"Calibration values set: A = {a}, B = {b}, C = {c}", fg="white")
+
+            # Save to JSON file
+            calib_data = {"a": a, "b": b, "c": c}
+            with open("calibration.json", "w") as f:
+                json.dump(calib_data, f)
+        else:
+            self.status_label.config(text="Both 'a' and 'b' values are required.", fg="red")
+
+
 
 class SystemMonitoringPage(BasePage):
     def __init__(self, parent, controller):
