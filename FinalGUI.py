@@ -626,10 +626,10 @@ class CameraConfigPage(BasePage):
 
             # Start finalcamera.py
             creationflags3 = subprocess.CREATE_NEW_PROCESS_GROUP
-            self.ai_process = subprocess.Popen(["python", "finalcamera.py"], creationflags = subprocess.CREATE_NEW_PROCESS_GROUP)
+            self.ai_process = subprocess.Popen(["python", "finalcam.py"], creationflags = subprocess.CREATE_NEW_PROCESS_GROUP)
             print("Attempting to start")
             # ⬇️
-            Logger.log("Attempting to start finalcamera.py")
+            Logger.log("Attempting to start finalcam.py")
         except Exception as e:
             print(f"[ERROR] Failed to save or launch: {e}")
             # ⬇️
@@ -717,10 +717,16 @@ class CameraConfigPage(BasePage):
                                 Logger.log(f"[SOCKET] Message received: {message}")
 
                                 if message == "Alarm":
-                                    arduino.write(b"RED_ON\n")
+                                    try:
+                                        arduino.write(b"RED_ON\n")
+                                    except:
+                                        Logger.log("No Arduino")
                                 # Optional: Update GUI label or text box with message
                                 if message == "Stop":
-                                    arduino.write(b"RED_OFF\n")
+                                    try:
+                                        arduino.write(b"RED_OFF\n")
+                                    except:
+                                        Logger.log("No Arduino")
                     except Exception as e:
                         print(f"[SOCKET] Listener error: {e}")
                         # ⬇️
@@ -1020,8 +1026,8 @@ class CalibrationPage(BasePage):
         # tk.Button(calib_frame, text="Submit Calibration", bg="#0055aa", fg="white",
         #           command=self.submit_calibration).grid(row=3, column=0, columnspan=2, pady=10)
 
-        # self.status_label = tk.Label(self, text="", fg="white", bg="#1a1a1a")
-        # self.status_label.pack(pady=10)
+        self.status_label = tk.Label(self, text="", fg="white", bg="#1a1a1a")
+        self.status_label.pack(pady=10)
 
     def save_zones_to_file(self):
         try:

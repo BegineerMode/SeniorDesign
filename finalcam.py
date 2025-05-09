@@ -31,10 +31,6 @@ camera2 = config.get("camera2")
 print("finalCamera has start!")
 
 import socket
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.connect(("10.0.0.2", 9998))
-sock.sendall(b"AI process started successfully")
 # -------------------------------
 # Serial Communication with Arduinos
 # -------------------------------
@@ -48,12 +44,47 @@ except Exception as e:
     print(f"Error connecting to Arduino: {e}")
     arduino = None
 
+
+class PersistentSocketClient:
+    def __init__(self, ip, port):
+        self.ip = ip
+        self.port = port
+        self.sock = None
+        self.connect()
+
+    def connect(self):
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.connect((self.ip, self.port))
+            print(f"[SOCKET] Connected to {self.ip}:{self.port}")
+            self.sock.sendall(b"AI process started successfully")
+        except Exception as e:
+            print(f"[SOCKET ERROR] Connection failed: {e}")
+            self.sock = None
+
+    def send(self, message: bytes):
+        if self.sock:
+            try:
+                self.sock.sendall(message)
+            except Exception as e:
+                print(f"[SOCKET ERROR] Send failed: {e}")
+                self.sock.close()
+                self.sock = None
+
+    def close(self):
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+
+
+sock = PersistentSocketClient("10.0.0.2", 10000)
+
 def command_listener():
     global recording, video_writer
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        s.bind(("10.0.0.2", 10002))
+        s.bind(("127.0.0.1", 10002))
         s.listen(1)
         print("[COMMAND] Listening for record commands on port 9998")
 
@@ -86,7 +117,7 @@ stream_url_1 = camera1
 stream_url_2 = camera2
 
 # Load YOLO model
-model = YOLO('D:/runs/detect/train11/weights/last.pt')
+model = YOLO('train11/weights/last.pt')
 
 # Camera parameters
 focal_length = 700  # Focal length in pixels
@@ -464,7 +495,7 @@ while True:
                 zone_label = "Red Zone"
                 zone_color = (0, 0, 255)
                 intrusion_detected = True
-                sock.sendall(b"Alarm")
+                sock.send(b"Alarm")
 
             elif is_point_in_zone(point_world, zones["blue"]):
                 zone_label = "Blue Zone"
@@ -483,7 +514,7 @@ while True:
 
         # After loop: turn off alarm if no red zone intrusion
         if not intrusion_detected:
-            sock.sendall(b"Stop")
+            sock.send(b"Stop")
 
         # Cleanup expired IDs
         id_memory = new_id_memory
