@@ -9,11 +9,15 @@ import serial
 import math
 import smtplib
 from email.mime.text import MIMEText
-import socket, pickle, struct
+import socket, pickle, struct, os
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.connect(("127.0.0.1", 9999))  # IP of GUI machine over WireGuard
-conn = sock.makefile('wb')
+
+recording = False
+video_writer = None
+
+import time
+frame_counter = 0
+fps_timer = time.time()
 
 import json
 
@@ -43,6 +47,37 @@ try:
 except Exception as e:
     print(f"Error connecting to Arduino: {e}")
     arduino = None
+
+def command_listener():
+    global recording, video_writer
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(("10.0.0.2", 10002))
+        s.listen(1)
+        print("[COMMAND] Listening for record commands on port 9998")
+
+        while True:
+            conn, _ = s.accept()
+            with conn:
+                msg = conn.recv(1024).decode().strip()
+                print(f"[COMMAND] Received: {msg}")
+
+                if msg == "StartRecording":
+                    filename = time.strftime("Recording_%Y-%m-%d_%H-%M-%S") + ".mp4"
+                    filepath = os.path.join("Recordings", filename)
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    video_writer = cv2.VideoWriter(filepath, fourcc, 20.0, (1280, 720))
+                    recording = True
+                    print("[RECORD] Started")
+                elif msg == "StopRecording":
+                    if video_writer:
+                        video_writer.release()
+                        video_writer = None
+                    recording = False
+                    print("[RECORD] Stopped")
+
+threading.Thread(target=command_listener, daemon=True).start()
 
 # Video file paths
 # stream_url_1 = "http://192.168.1.134:8080"
@@ -120,13 +155,14 @@ def send_text_alert():
 # Fixed Virtual Zone Class (no dragging)
 # -------------------------------
 # Define world-coordinate zones (in feet)
-zone_red = np.array([[-3, 10], [3, 10], [3, 14], [-3, 14]], dtype=np.float32)
-zone_blue = np.array([[-3, 14], [3, 14], [3, 18], [-3, 18]], dtype=np.float32)
+with open("zones.json", "r") as f:
+    loaded_zones = json.load(f)
 
 zones = {
-    "red": zone_red,
-    "blue": zone_blue,
+    name: np.array(coords, dtype=np.float32)
+    for name, coords in loaded_zones.items()
 }
+
 
 # Helper to check if real-world (x, y) is inside a zone
 def is_point_in_zone(xy_point, zone_polygon):
@@ -481,10 +517,18 @@ while True:
             cv2.putText(combined_frame, "Intrusion Detected!", (10, FRAME_HEIGHT + 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
 
-        data = pickle.dumps(combined_frame)
-        size = struct.pack(">L", len(data))
-        conn.write(size + data)
-        conn.flush()
+        frame = cv2.resize(combined_frame, (1280, 720))
+
+        if recording and video_writer:
+            video_writer.write(frame)
+
+        cv2.imshow("Combined Frame", frame)
+        
+        frame_counter += 1
+        if time.time() - fps_timer >= 1.0:
+            print(f"[FPS] {frame_counter} frames/sec")
+            frame_counter = 0
+            fps_timer = time.time()
 
     key = cv2.waitKey(1)
     if key & 0xFF == ord('q'):
